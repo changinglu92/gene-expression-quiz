@@ -210,6 +210,7 @@
     let questionRound = 0;
     let netText = "正在连接答题通道…";
 
+    document.body.classList.add("is-host");
     $app.innerHTML = "";
     $app.appendChild(el(`
       <div class="host host-fill is-lobby" id="host-root">
@@ -587,8 +588,10 @@
             <h2>请台下同学扫码加入</h2>
             <p>台上两位同学分别站在红队、蓝队一侧。开始后，先按中间「抢答」，再在本队一侧点选答案。<br>台下同学扫码或输入房间号，选队后在手机上同步作答。</p>
           </div>`;
-        buzzWrap.innerHTML = "";
-        buzzStatus.textContent = "";
+        buzzWrap.innerHTML = `<button type="button" class="buzz-btn start-btn" id="btn-start-main">开始本题</button>`;
+        const startMain = $("#btn-start-main");
+        if (startMain) startMain.onclick = startQuestion;
+        buzzStatus.textContent = "教师按中间金色大按钮，即可开始第 1 题";
         buzzStatus.className = "buzz-status";
         expl.classList.add("hidden");
         expl.innerHTML = "";

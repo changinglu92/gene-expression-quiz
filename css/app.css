@@ -32,15 +32,24 @@ body {
   min-height: 100%;
   overflow: auto;
 }
+body.is-host {
+  overflow: hidden;
+  height: 100%;
+  max-height: 100%;
+}
 
 button, input { font-family: inherit; }
 button { cursor: pointer; }
 .hidden { display: none !important; }
 
 #app { min-height: 100%; }
+body.is-host #app {
+  height: 100%;
+  overflow: hidden;
+}
 
 /* landing */
-.landing, .host, .play, .toast-wrap { padding: 24px; }
+.landing, .play, .toast-wrap { padding: 24px; }
 .hero {
   max-width: 980px;
   margin: 6vh auto 0;
@@ -140,9 +149,10 @@ h1 {
 .host-fill {
   max-width: none;
   width: 100%;
-  height: 100vh;
-  height: 100dvh;
-  padding: 10px 12px 8px;
+  height: 100%;
+  max-height: 100%;
+  padding: 8px 10px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -438,18 +448,34 @@ h1 {
 .mid-join .room-chip b { font-size: 22px; letter-spacing: 0.16em; }
 .mid-join .join-hint { color: var(--muted); font-size: 12px; line-height: 1.5; max-width: 9em; }
 
-/* lobby: enlarge QR and room code */
+/* lobby: enlarge QR and room code, keep start button + teacher bar on screen */
 .host-fill.is-lobby .board {
-  grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.2fr) minmax(0, 0.9fr);
+  grid-template-columns: minmax(0, 0.9fr) minmax(300px, 1.2fr) minmax(0, 0.9fr);
 }
-.host-fill.is-lobby .mid-panel { padding: 18px 20px; }
+.host-fill.is-lobby .mid-panel { padding: 12px 16px 10px; }
+.host-fill.is-lobby .mid-scores { margin-top: 8px; }
+.host-fill.is-lobby .mid-score { padding: 6px 8px 8px; }
+.host-fill.is-lobby .mid-score .num { font-size: clamp(22px, 2.4vw, 36px); }
+.host-fill.is-lobby .buzz-wrap {
+  flex: 0 0 auto;
+  margin: 10px 0 8px;
+}
+.host-fill.is-lobby .start-btn {
+  min-height: 88px;
+  max-width: 100%;
+  letter-spacing: 0.08em;
+  font-size: clamp(32px, 3.6vw, 48px);
+}
 .host-fill.is-lobby .mid-join {
   flex-direction: column;
-  margin-top: 16px;
+  margin-top: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  justify-content: flex-end;
 }
-.host-fill.is-lobby .mid-join .room-chip b { font-size: 52px; letter-spacing: 0.22em; }
-.host-fill.is-lobby #qrbox { width: 240px; padding: 14px; }
-.host-fill.is-lobby .join-hint { max-width: none; text-align: center; font-size: 15px; color: var(--text); }
+.host-fill.is-lobby .mid-join .room-chip b { font-size: 44px; letter-spacing: 0.22em; }
+.host-fill.is-lobby #qrbox { width: min(200px, 26vh); padding: 10px; }
+.host-fill.is-lobby .join-hint { max-width: none; text-align: center; font-size: 14px; color: var(--text); }
 .host-fill.is-play #qrbox { width: 92px; padding: 6px; border-radius: 10px; }
 .host-fill.is-play .join-hint { display: none; }
 
@@ -484,9 +510,10 @@ h1 {
   opacity: 0.95;
 }
 
-/* slim teacher bar — visually smaller than 抢答 */
+/* slim teacher bar — visually smaller than 抢答; always reserved at the bottom */
 .teacher-bar {
   flex: 0 0 auto;
+  flex-shrink: 0;
   margin-top: 8px;
   display: flex;
   align-items: center;
@@ -498,6 +525,12 @@ h1 {
   background: rgba(8, 18, 30, 0.78);
   border: 1px solid var(--line);
   min-height: 52px;
+  z-index: 6;
+}
+.host-fill.is-lobby .teacher-bar .btn-teach.btn-gold {
+  min-height: 48px;
+  font-size: 18px;
+  padding: 10px 22px;
 }
 .teacher-bar .bar-lab {
   font-size: 12px;
