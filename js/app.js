@@ -147,7 +147,7 @@
         <div class="hero">
           <div class="kicker">高三一轮复习公开课</div>
           <h1>基因的表达<br>快问快答 · 红蓝 PK</h1>
-          <p class="sub">转录 · 翻译 · 途径 1　　共 ${TOTAL} 题　　按正确率计分</p>
+          <p class="sub">转录 · 翻译 · 途径 1　　共 ${TOTAL} 题　　台上抢答计分，台下按正确率统计</p>
           <div class="actions">
             <button class="btn btn-gold" id="go-host">我是教师，发起 PK</button>
           </div>
@@ -158,7 +158,7 @@
               <button class="btn btn-gold" id="go-play">加入</button>
             </div>
           </div>
-          <p class="hint">教师用大屏出题并展示二维码。学生用手机或平板扫码，选红队或蓝队作答。没有 iPad 的同学也可以用手机参加。计分看正确率，两队人数不等也同样公平。</p>
+          <p class="hint">教师用一体机或投影打开本页，点击「我是教师，发起 PK」。台上两位同学看左右两边的题目：先按中间「抢答」，再在自己一侧点选答案。台下同学用手机或平板扫码（或输入房间号），选择红队或蓝队，在座位上同步作答。台上按抢答与补答计分；台下看各队正确率，人数不等也同样公平。</p>
         </div>
       </div>
     `));
@@ -172,110 +172,92 @@
     }
   }
 
+  function freshBuzz() {
+    return {
+      step: "wait-buzz", // wait-buzz | wait-answer | answered | revealed-wrong | wait-rebound | done
+      team: null,
+      choice: null,
+      ok: null,
+      reboundTeam: null,
+      reboundChoice: null,
+      reboundOk: null,
+      awarded: { red: 0, blue: 0 },
+      historyPushed: false
+    };
+  }
+
+  function stageWinnerLabel(score) {
+    if (score.red === score.blue) return { text: "台上平局", color: "var(--gold)" };
+    if (score.red > score.blue) return { text: "台上胜出：红队", color: "var(--red-2)" };
+    return { text: "台上胜出：蓝队", color: "var(--blue-2)" };
+  }
+
   /* ---------------- host ---------------- */
   function renderHost(presetRoom) {
     const room = presetRoom || roomCode();
     if (!presetRoom) location.hash = "#/host/" + room;
     const players = {};
-    const answers = {}; // playerId -> {qId, choice, ok}
+    const answers = {}; // playerId -> {qId, choice, ok, round}
     const history = []; // {qid, red, blue}
+    const stageScore = { red: 0, blue: 0 };
+    let buzz = freshBuzz();
     let phase = "lobby"; // lobby | question | reveal | final
     let qIndex = 0;
     let remain = SECONDS;
     let timer = null;
     let bus = null;
     let demo = false;
+    let questionRound = 0;
+    let netText = "正在连接答题通道…";
 
     $app.innerHTML = "";
     $app.appendChild(el(`
-      <div class="host">
-        <div class="topbar">
-          <div class="brand">基因的表达 · 快问快答<small>教师大屏　　房间号用于学生扫码加入</small></div>
-          <div class="room-chip">
-            <span class="status-dot off" id="dot"></span>
-            <span>房间</span><b id="room-no">${esc(room)}</b>
-          </div>
-        </div>
-        <div class="host-grid">
-          <aside class="side">
-            <div class="card">
+      <div class="host host-fill is-lobby" id="host-root">
+        <div class="board">
+          <section class="side-panel red" id="panel-red"></section>
+          <section class="mid-panel" id="panel-mid">
+            <div class="mid-top" id="mid-top"></div>
+            <div class="mid-scores" id="mid-scores"></div>
+            <div id="mid-body"></div>
+            <div class="buzz-wrap" id="buzz-wrap"></div>
+            <div class="buzz-status" id="buzz-status"></div>
+            <div class="mid-explain hidden" id="mid-explain"></div>
+            <div class="mid-audience" id="mid-audience"></div>
+            <div class="mid-join" id="mid-join">
+              <div class="room-chip">
+                <span class="status-dot off" id="dot"></span>
+                <span>房间</span><b id="room-no">${esc(room)}</b>
+              </div>
               <div id="qrbox"></div>
-              <p class="tiny" id="stu-url"></p>
-              <p>学生扫码后选择红队或蓝队即可作答</p>
+              <div class="join-hint">台下同学扫码或输入房间号，选择红队或蓝队即可作答</div>
             </div>
-            <div class="score-row">
-              <div class="team-card red">
-                <div class="lab">红队正确率</div>
-                <div class="big" id="red-big">0%</div>
-                <div class="meta" id="red-meta">0 人</div>
-              </div>
-              <div class="team-card blue">
-                <div class="lab">蓝队正确率</div>
-                <div class="big" id="blue-big">0%</div>
-                <div class="meta" id="blue-meta">0 人</div>
-              </div>
-            </div>
-            <div class="card" style="padding:14px 16px">
-              <div class="tiny" id="net-status" style="text-align:left">正在连接答题通道…</div>
-            </div>
-          </aside>
-          <section class="card stage" id="stage"></section>
+          </section>
+          <section class="side-panel blue" id="panel-blue"></section>
         </div>
+        <div class="teacher-bar" id="teacher-bar"></div>
       </div>
     `));
 
     const url = studentUrl(room);
-    $("#stu-url").textContent = url;
-    try { new QRCode($("#qrbox"), { text: url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M }); }
+    try { new QRCode($("#qrbox"), { text: url, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.M }); }
     catch (e) { $("#qrbox").textContent = url; }
 
     function setDot(on, text) {
       const d = $("#dot");
       d.classList.toggle("on", on);
       d.classList.toggle("off", !on);
-      if (text) $("#net-status").textContent = text;
+      if (text) netText = text;
+      const net = $("#net-status");
+      if (net) net.textContent = netText;
     }
 
+    function count(team) {
+      return Object.values(players).filter((p) => p.team === team).length;
+    }
     function currentRates() {
       if (phase === "lobby") return { red: { n: count("red"), ok: 0, answered: 0, rate: 0 }, blue: { n: count("blue"), ok: 0, answered: 0, rate: 0 } };
       const q = QUESTIONS[Math.min(qIndex, TOTAL - 1)];
       return teamStats(players, answers, q.id);
-    }
-    function count(team) {
-      return Object.values(players).filter((p) => p.team === team).length;
-    }
-    function totals() {
-      const cur = (phase === "reveal" || phase === "question") ? currentRates() : null;
-      const hist = history.slice();
-      if (phase === "reveal" && cur) {
-        // already pushed after reveal; don't double
-      }
-      return avgRates(history);
-    }
-    function paintScores() {
-      const cur = currentRates();
-      const tot = avgRates(history);
-      if (phase === "lobby") {
-        $("#red-big").textContent = count("red") + " 人";
-        $("#blue-big").textContent = count("blue") + " 人";
-        $("#red-meta").textContent = "已加入，等待开始";
-        $("#blue-meta").textContent = "已加入，等待开始";
-      } else if (phase === "question") {
-        $("#red-big").textContent = cur.red.answered + "/" + cur.red.n;
-        $("#blue-big").textContent = cur.blue.answered + "/" + cur.blue.n;
-        $("#red-meta").textContent = "已作答（揭晓后计算正确率）";
-        $("#blue-meta").textContent = "已作答（揭晓后计算正确率）";
-      } else if (phase === "reveal") {
-        $("#red-big").textContent = cur.red.rate + "%";
-        $("#blue-big").textContent = cur.blue.rate + "%";
-        $("#red-meta").textContent = cur.red.ok + "/" + cur.red.n + " 答对 · 未作答记入不正确";
-        $("#blue-meta").textContent = cur.blue.ok + "/" + cur.blue.n + " 答对 · 未作答记入不正确";
-      } else {
-        $("#red-big").textContent = tot.red + "%";
-        $("#blue-big").textContent = tot.blue + "%";
-        $("#red-meta").textContent = "全程平均正确率 · " + count("red") + " 人";
-        $("#blue-meta").textContent = "全程平均正确率 · " + count("blue") + " 人";
-      }
     }
 
     function snapshot() {
@@ -288,10 +270,12 @@
         remain,
         deadline: Date.now() + remain * 1000,
         total: TOTAL,
+        round: questionRound,
         players: Object.values(players).map((p) => ({ id: p.id, name: p.name, team: p.team })),
         rates: currentRates(),
         history,
         totals: avgRates(history),
+        stageScore: { red: stageScore.red, blue: stageScore.blue },
         at: Date.now()
       };
     }
@@ -312,23 +296,20 @@
 
     function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
 
-    function startQuestion() {
+    function startTicker() {
       stopTimer();
-      phase = "question";
-      answersClearForCurrent();
       remain = SECONDS;
-      paintStage();
-      publish(true);
       timer = setInterval(() => {
-        remain -= 1;
+        if (remain > 0) remain -= 1;
         const tEl = $("#timer");
         if (tEl) {
           tEl.textContent = remain;
           tEl.classList.toggle("warn", remain <= 5);
         }
-        if (remain <= 0) reveal();
+        // 计时仅作提示，到 0 不自动揭晓，节奏由教师控制
       }, 1000);
     }
+
     function answersClearForCurrent() {
       const qid = QUESTIONS[qIndex].id;
       Object.keys(answers).forEach((id) => {
@@ -336,20 +317,122 @@
       });
     }
 
-    function reveal() {
-      if (phase !== "question") return;
+    function startQuestion() {
       stopTimer();
-      phase = "reveal";
+      phase = "question";
+      buzz = freshBuzz();
+      answersClearForCurrent();
+      questionRound += 1;
+      startTicker();
+      paintAll();
+      publish(true);
+    }
+
+    function undoAwardsAndHistory() {
+      stageScore.red -= buzz.awarded.red;
+      stageScore.blue -= buzz.awarded.blue;
+      buzz.awarded = { red: 0, blue: 0 };
+      if (buzz.historyPushed) {
+        const last = history[history.length - 1];
+        if (last && last.qid === QUESTIONS[qIndex].id) history.pop();
+        buzz.historyPushed = false;
+      }
+    }
+
+    function pushAudienceHistory() {
+      if (buzz.historyPushed) return;
       const st = currentRates();
       history.push({ qid: QUESTIONS[qIndex].id, red: st.red.rate, blue: st.blue.rate });
-      paintStage();
+      buzz.historyPushed = true;
+    }
+
+    function award(team, pts) {
+      if (!team || !pts) return;
+      stageScore[team] += pts;
+      buzz.awarded[team] += pts;
+    }
+
+    function reveal() {
+      const q = QUESTIONS[qIndex];
+      if (phase === "question" && buzz.step === "answered") {
+        stopTimer();
+        phase = "reveal";
+        pushAudienceHistory();
+        if (buzz.ok) {
+          award(buzz.team, 10);
+          buzz.step = "done";
+        } else {
+          buzz.step = "revealed-wrong";
+        }
+        paintAll();
+        publish(true);
+        return;
+      }
+      if (phase === "question") {
+        // 尚未抢答或尚未点选，教师仍可直接揭晓讲评（台上本题不得分）
+        stopTimer();
+        phase = "reveal";
+        pushAudienceHistory();
+        buzz.step = "done";
+        paintAll();
+        publish(true);
+        return;
+      }
+      if (phase === "reveal" && buzz.step === "revealed-wrong") {
+        // 跳过补答，公布答案与解析
+        buzz.step = "done";
+        paintAll();
+        publish(true);
+      }
+    }
+
+    function offerRebound() {
+      if (buzz.step !== "revealed-wrong" || !buzz.team) return;
+      buzz.reboundTeam = buzz.team === "red" ? "blue" : "red";
+      buzz.reboundChoice = null;
+      buzz.reboundOk = null;
+      buzz.step = "wait-rebound";
+      paintAll();
+    }
+
+    function onStageChoice(team, choice) {
+      const q = QUESTIONS[qIndex];
+      if (buzz.step === "wait-answer" && phase === "question") {
+        buzz.team = team;
+        buzz.choice = choice;
+        buzz.ok = choice === q.answer;
+        buzz.step = "answered";
+        paintAll();
+        return;
+      }
+      if (buzz.step === "wait-rebound" && team === buzz.reboundTeam) {
+        buzz.reboundChoice = choice;
+        buzz.reboundOk = choice === q.answer;
+        if (buzz.reboundOk) award(team, 5);
+        buzz.step = "done";
+        paintAll();
+        publish(true);
+      }
+    }
+
+    function reBuzz() {
+      if (phase === "lobby" || phase === "final") return;
+      undoAwardsAndHistory();
+      stopTimer();
+      phase = "question";
+      answersClearForCurrent();
+      questionRound += 1;
+      buzz = freshBuzz();
+      startTicker();
+      paintAll();
       publish(true);
     }
 
     function next() {
       if (qIndex >= TOTAL - 1) {
+        stopTimer();
         phase = "final";
-        paintStage();
+        paintAll();
         publish(true);
         return;
       }
@@ -357,92 +440,300 @@
       startQuestion();
     }
 
-    function optClass(key, q, revealed) {
-      if (!revealed) return "";
-      return key === q.answer ? "correct" : "";
+    function restartSameRoom() {
+      history.length = 0;
+      Object.keys(answers).forEach((k) => delete answers[k]);
+      stageScore.red = 0;
+      stageScore.blue = 0;
+      buzz = freshBuzz();
+      qIndex = 0;
+      questionRound += 1;
+      phase = "lobby";
+      remain = SECONDS;
+      stopTimer();
+      paintAll();
+      publish(true);
     }
 
-    function paintStage() {
-      const stage = $("#stage");
-      paintScores();
+    function optionClass(team, key, q) {
+      const picked = (buzz.team === team && buzz.choice === key);
+      const reboundPicked = (buzz.reboundTeam === team && buzz.reboundChoice === key);
+      const showAnswer = buzz.step === "done";
+      const showFirstWrong = (buzz.step === "revealed-wrong" || buzz.step === "wait-rebound" || buzz.step === "done") && picked && buzz.ok === false;
+      let mode = "locked";
+      if (phase === "question" && buzz.step === "wait-buzz") mode = "idle";
+      else if (phase === "question" && buzz.step === "wait-answer") mode = "ready";
+      else if (buzz.step === "wait-rebound" && team === buzz.reboundTeam && !buzz.reboundChoice) mode = "ready";
+      else mode = "locked";
+
+      const cls = ["opt-btn", mode];
+      if (picked || reboundPicked) cls.push("picked");
+      if (showFirstWrong || (showAnswer && reboundPicked && buzz.reboundOk === false)) cls.push("wrong");
+      if (showAnswer && key === q.answer) cls.push("correct");
+      return cls.join(" ");
+    }
+
+    function optionModeAllowsClick(team) {
+      if (phase === "question" && buzz.step === "wait-answer") return true;
+      if (buzz.step === "wait-rebound" && team === buzz.reboundTeam && !buzz.reboundChoice) return true;
+      return false;
+    }
+
+    function renderOptions(team, q) {
+      const items = q.type === "tf"
+        ? [{ k: "T", lab: "对" }, { k: "F", lab: "错" }]
+        : Object.keys(q.options).map((k) => ({ k, lab: k + "　" + q.options[k] }));
+      return `<div class="panel-opts">` + items.map((it) =>
+        `<button type="button" class="${optionClass(team, it.k, q)}" data-team="${team}" data-k="${it.k}">
+          <span class="key">${it.k === "T" ? "对" : it.k === "F" ? "错" : esc(it.k)}</span>
+          <span>${it.k === "T" || it.k === "F" ? (it.k === "T" ? "对" : "错") : esc(q.options[it.k])}</span>
+        </button>`
+      ).join("") + `</div>`;
+    }
+
+    function bindOptions(panel, team) {
+      panel.querySelectorAll(".opt-btn").forEach((btn) => {
+        btn.onclick = (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (!optionModeAllowsClick(team)) return;
+          onStageChoice(team, btn.getAttribute("data-k"));
+        };
+      });
+    }
+
+    function teamLabel(t) { return t === "red" ? "红队" : "蓝队"; }
+
+    function paintSides() {
+      const red = $("#panel-red");
+      const blue = $("#panel-blue");
+      const cur = currentRates();
+      const tot = avgRates(history);
+
+      function waitCopy(team) {
+        const n = count(team);
+        return `<div class="panel-wait">台上同学本题将在此作答。<br>台下已加入 ${n} 人，请扫中间二维码入队。</div>`;
+      }
+
       if (phase === "lobby") {
-        stage.innerHTML = `
-          <div class="q-tag">准备就绪</div>
-          <div class="q-stem">请学生扫左侧二维码，选择红队或蓝队。</div>
-          <p class="sub" style="margin-top:16px">共 ${TOTAL} 道题，每题 ${SECONDS} 秒。计分看各队正确率（答对人数 ÷ 本队人数），未作答记为不正确，人数不等也不吃亏。</p>
-          <div class="controls">
-            <button class="btn btn-gold" id="btn-start">人数到齐，开始第 1 题</button>
-          </div>`;
-        $("#btn-start").onclick = startQuestion;
+        red.innerHTML = `<div class="panel-hd"><div class="team-name">红队</div><div class="stage-pts"><div class="lab">台上得分</div><div class="num">0</div></div></div>${waitCopy("red")}`;
+        blue.innerHTML = `<div class="panel-hd"><div class="team-name">蓝队</div><div class="stage-pts"><div class="lab">台上得分</div><div class="num">0</div></div></div>${waitCopy("blue")}`;
+        red.classList.remove("is-active", "is-dim");
+        blue.classList.remove("is-active", "is-dim");
         return;
       }
+
       if (phase === "final") {
-        const tot = avgRates(history);
-        const winner = tot.red === tot.blue ? "平局！" : (tot.red > tot.blue ? "红队胜出！" : "蓝队胜出！");
-        const wcolor = tot.red === tot.blue ? "var(--gold)" : (tot.red > tot.blue ? "var(--red-2)" : "var(--blue-2)");
-        stage.innerHTML = `
-          <div class="final">
-            <div class="q-tag">全程结束</div>
-            <div class="winner" style="color:${wcolor}">${winner}</div>
-            <div class="scoreline" style="color:var(--red-2)">红队平均正确率 ${tot.red}%</div>
-            <div class="scoreline" style="color:var(--blue-2)">蓝队平均正确率 ${tot.blue}%</div>
-            <p class="sub" style="margin-top:18px">按正确率计分，已经扣除了人数差的影响。</p>
-            <div class="controls" style="justify-content:center">
-              <button class="btn btn-ghost" id="btn-again">再来一局（同一房间）</button>
-            </div>
-          </div>`;
-        $("#btn-again").onclick = () => {
-          history.length = 0;
-          Object.keys(answers).forEach((k) => delete answers[k]);
-          qIndex = 0;
-          phase = "lobby";
-          paintStage();
-          publish(true);
-        };
+        red.innerHTML = `
+          <div class="panel-hd"><div class="team-name">红队</div><div class="stage-pts"><div class="lab">台上得分</div><div class="num">${stageScore.red}</div></div></div>
+          <div class="final-side-note">台下正确率<br><b>${tot.red}%</b><br><span style="opacity:.85;font-size:16px">${count("red")} 人 · 未作答记入不正确</span></div>`;
+        blue.innerHTML = `
+          <div class="panel-hd"><div class="team-name">蓝队</div><div class="stage-pts"><div class="lab">台上得分</div><div class="num">${stageScore.blue}</div></div></div>
+          <div class="final-side-note">台下正确率<br><b>${tot.blue}%</b><br><span style="opacity:.85;font-size:16px">${count("blue")} 人 · 未作答记入不正确</span></div>`;
+        const wr = stageScore.red > stageScore.blue;
+        const wb = stageScore.blue > stageScore.red;
+        red.classList.toggle("is-active", wr);
+        blue.classList.toggle("is-active", wb);
+        red.classList.toggle("is-dim", wb);
+        blue.classList.toggle("is-dim", wr);
         return;
       }
 
       const q = QUESTIONS[qIndex];
-      const revealed = phase === "reveal";
-      let opts = "";
-      if (q.type === "tf") {
-        opts = `
-          <div class="options">
-            <div class="tf-opt ${revealed && q.answer === "T" ? "correct" : ""}"><span class="key">√</span><span>正确</span></div>
-            <div class="tf-opt ${revealed && q.answer === "F" ? "correct" : ""}"><span class="key">×</span><span>错误</span></div>
+      const activeTeam = buzz.step === "wait-rebound" ? buzz.reboundTeam : buzz.team;
+      const showActive = !!(activeTeam && buzz.step !== "wait-buzz");
+      ["red", "blue"].forEach((team) => {
+        const panel = team === "red" ? red : blue;
+        panel.innerHTML = `
+          <div class="panel-hd">
+            <div class="team-name">${teamLabel(team)}</div>
+            <div class="stage-pts"><div class="lab">台上得分</div><div class="num">${stageScore[team]}</div></div>
+          </div>
+          <div class="panel-stem">${esc(q.stem)}</div>
+          ${renderOptions(team, q)}`;
+        bindOptions(panel, team);
+        const isOn = showActive && activeTeam === team;
+        const isOff = showActive && activeTeam !== team && (buzz.step === "answered" || buzz.step === "revealed-wrong" || buzz.step === "wait-rebound" || buzz.step === "done");
+        panel.classList.toggle("is-active", isOn);
+        panel.classList.toggle("is-dim", isOff);
+      });
+    }
+
+    function paintMid() {
+      const root = $("#host-root");
+      root.classList.toggle("is-lobby", phase === "lobby");
+      root.classList.toggle("is-play", phase === "question" || phase === "reveal");
+      root.classList.toggle("is-final", phase === "final");
+
+      const midTop = $("#mid-top");
+      const midBody = $("#mid-body");
+      const midScores = $("#mid-scores");
+      const buzzWrap = $("#buzz-wrap");
+      const buzzStatus = $("#buzz-status");
+      const expl = $("#mid-explain");
+      const aud = $("#mid-audience");
+      const q = QUESTIONS[Math.min(qIndex, TOTAL - 1)];
+      const cur = currentRates();
+      const tot = avgRates(history);
+
+      midScores.innerHTML = `
+        <div class="mid-score red"><div class="lab">红队台上得分</div><div class="num">${stageScore.red}</div></div>
+        <div class="mid-score blue"><div class="lab">蓝队台上得分</div><div class="num">${stageScore.blue}</div></div>`;
+
+      if (phase === "lobby") {
+        midTop.innerHTML = `<div class="q-tag">准备就绪</div>`;
+        midBody.innerHTML = `
+          <div class="lobby-copy">
+            <h2>请台下同学扫码加入</h2>
+            <p>台上两位同学分别站在红队、蓝队一侧。开始后，先按中间「抢答」，再在本队一侧点选答案。<br>台下同学扫码或输入房间号，选队后在手机上同步作答。</p>
           </div>`;
-      } else {
-        opts = `<div class="options">` + Object.keys(q.options).map((k) =>
-          `<div class="opt ${optClass(k, q, revealed)}"><span class="key">${k}</span><span>${esc(q.options[k])}</span></div>`
-        ).join("") + `</div>`;
+        buzzWrap.innerHTML = "";
+        buzzStatus.textContent = "";
+        buzzStatus.className = "buzz-status";
+        expl.classList.add("hidden");
+        expl.innerHTML = "";
+        aud.innerHTML = `台下已加入　<span class="r">红队 ${count("red")} 人</span>　·　<span class="b">蓝队 ${count("blue")} 人</span>`;
+        return;
       }
-      stage.innerHTML = `
-        <div style="display:flex;align-items:center;gap:12px">
-          <div class="q-tag">第 ${qIndex + 1} / ${TOTAL} 题　　${esc(q.tag)}</div>
-          ${phase === "question" ? `<div class="timer ${remain <= 5 ? "warn" : ""}" id="timer">${remain}</div>` : ""}
+
+      if (phase === "final") {
+        const w = stageWinnerLabel(stageScore);
+        midTop.innerHTML = `<div class="q-tag">全程结束</div>`;
+        midBody.innerHTML = `
+          <div class="final-mid">
+            <div class="winner" style="color:${w.color}">${w.text}</div>
+            <div class="scoreline" style="color:var(--red-2)">红队台上 ${stageScore.red} 分</div>
+            <div class="scoreline" style="color:var(--blue-2)">蓝队台上 ${stageScore.blue} 分</div>
+          </div>`;
+        buzzWrap.innerHTML = "";
+        buzzStatus.textContent = "";
+        buzzStatus.className = "buzz-status";
+        expl.classList.add("hidden");
+        aud.innerHTML = `台下正确率　<span class="r">红队 <b>${tot.red}%</b></span>　·　<span class="b">蓝队 <b>${tot.blue}%</b></span><br>未作答记入不正确，已扣除人数差的影响。`;
+        return;
+      }
+
+      midTop.innerHTML = `
+        <div class="q-tag">第 ${qIndex + 1} / ${TOTAL} 题　　${esc(q.tag)}</div>
+        ${phase === "question" ? `<div class="timer ${remain <= 5 ? "warn" : ""}" id="timer">${remain}</div>` : `<div class="timer idle">揭晓</div>`}`;
+      midBody.innerHTML = "";
+
+      const canBuzz = phase === "question" && buzz.step === "wait-buzz";
+      let buzzLabel = "抢答";
+      let buzzCls = "buzz-btn";
+      if (canBuzz) buzzCls += " is-ready";
+      if (buzz.step === "wait-answer") { buzzLabel = "请作答"; buzzCls += " is-wait"; }
+      else if (buzz.step === "answered") buzzLabel = teamLabel(buzz.team) + "已作答";
+      else if (buzz.step === "revealed-wrong") buzzLabel = teamLabel(buzz.team) + "抢答错误";
+      else if (buzz.step === "wait-rebound") buzzLabel = teamLabel(buzz.reboundTeam) + "补答中";
+      else if (buzz.step === "done" && buzz.team) buzzLabel = "本题结束";
+      else if (buzz.step === "done") buzzLabel = "已揭晓";
+
+      buzzWrap.innerHTML = `<button type="button" class="${buzzCls}" id="btn-buzz" ${canBuzz ? "" : "disabled"}>${buzzLabel}</button>`;
+      const bz = $("#btn-buzz");
+      if (bz) bz.onclick = () => {
+        if (!(phase === "question" && buzz.step === "wait-buzz")) return;
+        buzz.step = "wait-answer";
+        paintAll();
+      };
+
+      buzzStatus.className = "buzz-status";
+      if (buzz.step === "wait-buzz") {
+        buzzStatus.textContent = "先按「抢答」，再在本队一侧作答";
+      } else if (buzz.step === "wait-answer") {
+        buzzStatus.textContent = "请作答：左右两侧均可点选，先点中的一队锁定答案";
+        buzzStatus.classList.add("ok");
+      } else if (buzz.step === "answered") {
+        buzzStatus.textContent = teamLabel(buzz.team) + "已作答，请教师揭晓";
+        buzzStatus.classList.add(buzz.team);
+      } else if (buzz.step === "revealed-wrong") {
+        buzzStatus.textContent = teamLabel(buzz.team) + "抢答错误，得 0 分。可请对方补答。";
+        buzzStatus.classList.add("no");
+      } else if (buzz.step === "wait-rebound") {
+        buzzStatus.textContent = teamLabel(buzz.reboundTeam) + "补答中，请在该队一侧点选";
+        buzzStatus.classList.add(buzz.reboundTeam);
+      } else if (buzz.team && buzz.ok) {
+        buzzStatus.textContent = teamLabel(buzz.team) + "抢答正确，+10 分";
+        buzzStatus.classList.add("ok");
+      } else if (buzz.reboundTeam && buzz.reboundOk) {
+        buzzStatus.textContent = teamLabel(buzz.team) + "抢答错误；" + teamLabel(buzz.reboundTeam) + "补答正确，+5 分";
+        buzzStatus.classList.add("ok");
+      } else if (buzz.reboundTeam && buzz.reboundOk === false) {
+        buzzStatus.textContent = teamLabel(buzz.team) + "抢答错误；" + teamLabel(buzz.reboundTeam) + "补答错误，均得 0 分";
+        buzzStatus.classList.add("no");
+      } else if (buzz.team && buzz.ok === false) {
+        buzzStatus.textContent = teamLabel(buzz.team) + "抢答错误，得 0 分";
+        buzzStatus.classList.add("no");
+      } else {
+        buzzStatus.textContent = "本题台上未抢答，台上不得分";
+      }
+
+      const showExplain = buzz.step === "done";
+      if (showExplain) {
+        expl.classList.remove("hidden");
+        expl.innerHTML = `<b>解析　</b>${esc(q.explain)}`;
+      } else {
+        expl.classList.add("hidden");
+        expl.innerHTML = "";
+      }
+
+      if (phase === "question") {
+        aud.innerHTML = `台下已作答　<span class="r">红队 <b>${cur.red.answered}/${cur.red.n}</b></span>　·　<span class="b">蓝队 <b>${cur.blue.answered}/${cur.blue.n}</b></span><br>揭晓后公布台下正确率，未作答记入不正确。`;
+      } else {
+        aud.innerHTML = `台下正确率　<span class="r">红队 <b>${cur.red.rate}%</b>（${cur.red.ok}/${cur.red.n}）</span>　·　<span class="b">蓝队 <b>${cur.blue.rate}%</b>（${cur.blue.ok}/${cur.blue.n}）</span>`;
+      }
+    }
+
+    function paintBar() {
+      const bar = $("#teacher-bar");
+      let actions = "";
+      if (phase === "lobby") {
+        actions = `<button type="button" class="btn btn-teach btn-gold" id="btn-start">开始本题</button>`;
+      } else if (phase === "final") {
+        actions = `<button type="button" class="btn btn-teach btn-ghost" id="btn-again">再来一局（同一房间）</button>`;
+      } else {
+        if (buzz.step === "revealed-wrong") {
+          actions += `<button type="button" class="btn btn-teach btn-ok" id="btn-rebound">对方补答</button>`;
+          actions += `<button type="button" class="btn btn-teach btn-gold" id="btn-lock">揭晓</button>`;
+        } else if (buzz.step !== "done") {
+          actions += `<button type="button" class="btn btn-teach btn-gold" id="btn-lock">揭晓</button>`;
+        }
+        if (buzz.step === "done") {
+          actions += `<button type="button" class="btn btn-teach btn-gold" id="btn-next">${qIndex >= TOTAL - 1 ? "查看最终得分" : "下一题"}</button>`;
+        }
+        actions += `<button type="button" class="btn btn-teach" id="btn-rebuzz">重抢</button>`;
+      }
+      bar.innerHTML = `
+        <div class="bar-left">
+          <span class="bar-lab">教师操作</span>
+          <span class="net" id="net-status">${esc(netText)}</span>
         </div>
-        <div class="q-stem">${esc(q.stem)}</div>
-        ${opts}
-        ${revealed ? `<div class="explain"><b>解析　</b>${esc(q.explain)}</div>` : ""}
-        <div class="controls">
-          ${phase === "question" ? `<button class="btn btn-gold" id="btn-lock">提前锁定并揭晓</button>` : ""}
-          ${phase === "reveal" ? `<button class="btn btn-gold" id="btn-next">${qIndex >= TOTAL - 1 ? "查看最终得分" : "下一题"}</button>` : ""}
-        </div>`;
+        <div class="bar-right">${actions}</div>`;
+      const start = $("#btn-start"); if (start) start.onclick = startQuestion;
       const lock = $("#btn-lock"); if (lock) lock.onclick = reveal;
       const nx = $("#btn-next"); if (nx) nx.onclick = next;
+      const rb = $("#btn-rebuzz"); if (rb) rb.onclick = reBuzz;
+      const bd = $("#btn-rebound"); if (bd) bd.onclick = offerRebound;
+      const ag = $("#btn-again"); if (ag) ag.onclick = restartSameRoom;
+    }
+
+    function paintAll() {
+      paintSides();
+      paintMid();
+      paintBar();
     }
 
     function onChat(msg) {
       if (!msg || !msg.type) return;
       if (msg.type === "join" && msg.id && (msg.team === "red" || msg.team === "blue")) {
         players[msg.id] = { id: msg.id, name: String(msg.name || "同学").slice(0, 12), team: msg.team, at: Date.now() };
-        paintScores();
+        paintAll();
         publish();
       }
       if (msg.type === "leave" && msg.id) {
         delete players[msg.id];
         delete answers[msg.id];
-        paintScores();
+        paintAll();
         publish();
       }
       if (msg.type === "answer" && msg.id && players[msg.id] && phase === "question") {
@@ -450,27 +741,29 @@
         if (msg.qId !== q.id) return;
         const choice = String(msg.choice || "");
         const ok = choice === q.answer;
-        answers[msg.id] = { qId: q.id, choice, ok };
-        paintScores();
-        // light publish so other screens update counts, but not too often
+        answers[msg.id] = { qId: q.id, choice, ok, round: questionRound };
+        paintAll();
       }
       if (msg.type === "hello") publish();
     }
 
-    paintStage();
+    paintAll();
     bus = connectBus(room, (msg) => {
-      if (msg && msg.type === "state") return; // ignore own / others
+      if (msg && msg.type === "state") return;
       onChat(msg);
-    }, (st, url) => {
+    }, (st) => {
       if (st === "on") {
         demo = false;
-        setDot(true, "答题通道已接通，学生扫码即可加入。");
+        setDot(true, "答题通道已接通，台下学生扫码即可加入。");
+        paintBar();
         publish();
       } else if (st === "connecting") {
         setDot(false, "正在连接答题通道…");
+        paintBar();
       } else if (st === "error" || st === "off") {
         demo = true;
-        setDot(false, "答题通道暂时连不上。大屏仍可出题讲评；请检查网络后刷新本页重试。");
+        setDot(false, "答题通道暂时连不上。大屏仍可出题、抢答与讲评；请检查网络后刷新本页重试。");
+        paintBar();
       }
     });
 
@@ -556,12 +849,16 @@
       if (state.phase === "final") {
         stopTick();
         const tot = state.totals || { red: 0, blue: 0 };
-        const winner = tot.red === tot.blue ? "本局平局" : (tot.red > tot.blue ? "红队胜出" : "蓝队胜出");
+        const ss = state.stageScore || { red: 0, blue: 0 };
+        const w = stageWinnerLabel(ss);
         body.innerHTML = `
           <div class="card final">
-            <div class="winner">${winner}</div>
-            <div class="scoreline" style="color:var(--red-2)">红队 ${tot.red}%</div>
-            <div class="scoreline" style="color:var(--blue-2)">蓝队 ${tot.blue}%</div>
+            <div class="winner" style="color:${w.color}">${w.text}</div>
+            <div class="scoreline" style="color:var(--red-2)">红队台上 ${ss.red} 分</div>
+            <div class="scoreline" style="color:var(--blue-2)">蓝队台上 ${ss.blue} 分</div>
+            <p class="sub" style="margin-top:16px">台下正确率</p>
+            <div class="scoreline" style="color:var(--red-2);font-size:22px">红队 ${tot.red}%</div>
+            <div class="scoreline" style="color:var(--blue-2);font-size:22px">蓝队 ${tot.blue}%</div>
           </div>`;
         return;
       }
@@ -569,7 +866,7 @@
       const q = QUESTIONS[state.qIndex];
       if (!q) return;
       const revealed = state.phase === "reveal";
-      const mine = myAnswer && myAnswer.qId === q.id ? myAnswer : null;
+      const mine = myAnswer && myAnswer.qId === q.id && myAnswer.round === state.round ? myAnswer : null;
       let grid = "";
       if (q.type === "tf") {
         grid = `<div class="choice-grid tf">
@@ -602,8 +899,8 @@
         btn.disabled = revealed;
         btn.onclick = () => {
           if (revealed || (state && state.phase !== "question")) return;
-          myAnswer = { qId: q.id, choice: k };
-          if (bus) bus.pubChat({ type: "answer", id: me.id, qId: q.id, choice: k });
+          myAnswer = { qId: q.id, choice: k, round: state.round };
+          if (bus) bus.pubChat({ type: "answer", id: me.id, qId: q.id, choice: k, round: state.round });
           lastPaintKey = "";
           paint();
         };
@@ -618,9 +915,9 @@
         state = msg;
         if (state.phase === "question") {
           const q = QUESTIONS[state.qIndex];
-          if (q && myAnswer && myAnswer.qId !== q.id) myAnswer = null;
+          if (q && myAnswer && (myAnswer.qId !== q.id || myAnswer.round !== state.round)) myAnswer = null;
         }
-        const key = [state.phase, state.qIndex, myAnswer && myAnswer.choice].join(":");
+        const key = [state.phase, state.qIndex, state.round, myAnswer && myAnswer.choice].join(":");
         if (key === lastPaintKey) return;
         lastPaintKey = key;
         paint();
